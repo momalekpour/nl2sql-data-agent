@@ -1,8 +1,21 @@
 # Architecture
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Project Structure](#project-structure)
+- [Request Flow](#request-flow)
+- [Operator Reference](#operator-reference)
+- [Guardrails](#guardrails)
+- [Application Layer](#application-layer)
+- [Core Utilities](#core-utilities)
+- [Configuration Reference](#configuration-reference)
+
+---
+
 ## Overview
 
-A modular NL2SQL system that translates natural language questions into SQL queries, enforces row-level guardrails, executes the SQL against a SQLite database, and returns results. Built around a composable operator pipeline with an intent gate, three independent guardrail layers, and a generic early-stop mechanism.
+A modular NL2SQL system that translates natural language questions into SQL queries, enforces row-level guardrails, executes the SQL against a SQLite database, and returns results in natural language. Built around a composable operator pipeline with five guardrail layers and a generic early-stop mechanism.
 
 ---
 
@@ -43,7 +56,8 @@ src/nl2sql_data_agent/
     ├── example_selector/           # Step 3 (optional): few-shot examples from BIRD dataset
     ├── sql_generator/              # Step 4: NL → SQL via LLM + Jinja2 prompt
     ├── sql_corrector/              # Step 5 (optional): syntax correction loop with sqlglot
-    └── sql_executor/               # Step 6: AST guardrail injection + DB execution
+    ├── sql_executor/               # Step 6: AST guardrail injection + DB execution
+    └── answer_generator/           # Step 7: LLM summarises results into natural language
 
 config.yaml                         # Runtime configuration for all operators
 
@@ -68,11 +82,13 @@ User input (cli.py / ui.py)
     │
     ▼
 NL2SQLApp.ask(user_question)          ← app.py
-    │  injects row_guardrails = {"Employee": {"Department": "<dept>"}}
+    │  injects schema_guardrails = {"Employee": ["*"], "Certification": ["*"], "Benefits": ["*"]}
+    │  injects row_guardrails    = {"Employee": {"Department": "<dept>"}}
+    │  injects fk_guardrails     = {"Certification": {fk→Employee}, "Benefits": {fk→Employee}}
     ▼
-NL2SQLPipeline.execute(user_question, accessible_schema, row_guardrails)
+NL2SQLPipeline.execute(user_question, schema_guardrails, row_guardrails, fk_guardrails)
     │
-    │  context = {user_question, accessible_schema, row_guardrails}  ← initial context
+    │  context = {user_question, schema_guardrails, row_guardrails, fk_guardrails}  ← initial context
     │
     ├─► IntentGuardrail.execute(context)
     │       LLM scope check: is the question about employees, certifications, or benefits?
@@ -91,12 +107,19 @@ NL2SQLPipeline.execute(user_question, accessible_schema, row_guardrails)
     ├─► SQLCorrector.execute(context)      [only when max_correction_attempts > 0]
     │       writes: sql_query (corrected), sql_corrector_sql_query, sql_corrector_is_successful
     │
-    └─► SQLExecutor.execute(context)
-            reads: sql_query, row_guardrails
-            injects missing WHERE conditions via sqlglot AST
-            executes SQL against DB
-            writes: sql_executor_sql_query, sql_executor_columns, sql_executor_rows,
-                    sql_executor_row_count, sql_executor_error
+    ├─► SQLExecutor.execute(context)
+    │       reads: sql_query, row_guardrails, fk_guardrails
+    │       Layer 3a: injects missing direct WHERE conditions via sqlglot AST
+    │       Layer 3b: injects FK subquery filters for child tables missing their parent
+    │       executes SQL against DB
+    │       writes: sql_executor_sql_query, sql_executor_columns, sql_executor_rows,
+    │               sql_executor_row_count, sql_executor_error
+    │
+    └─► AnswerGenerator.execute(context)
+            reads: user_question, sql_executor_columns, sql_executor_rows, sql_executor_sql_query
+            skips if: early_stop, sql_executor_error, or row_count == 0
+            LLM summarises the query results into a natural language answer
+            writes: answer_generator_answer, answer_generator_prompt, LLM metadata
     │
     ▼
 context dict returned (+ pipeline_latency, timestamp)
@@ -160,7 +183,7 @@ Pydantic `model_validator` enforces that `model_provider` and `model_name` are p
 
 **Guardrail — Layer 1 (schema restriction):**
 
-Accepts `accessible_schema: dict[str, list[str]]` from context. Before any technique runs, `_restrict_to_accessible()` filters `self.tables` to only the allowed tables/columns using shallow copies — `self.tables` is never mutated. Pass `"*"` to allow all columns in a table. Tables absent from `accessible_schema` are invisible to the LLM entirely.
+Accepts `schema_guardrails: dict[str, list[str]]` from context. Before any technique runs, `_apply_schema_guardrails()` filters `self.tables` to only the allowed tables/columns using shallow copies — `self.tables` is never mutated. Pass `"*"` to allow all columns in a table. Tables absent from `schema_guardrails` are invisible to the LLM entirely.
 
 **Context writes:** `schema_linker_db_schema` (str), `schema_linker_db_columns` (dict[str, list[str]])
 
@@ -213,12 +236,12 @@ Renders a Jinja2 prompt template with the schema, examples (if any), and user qu
 
 | Template | Context variables used |
 |---|---|
-| `zero_shot` | `schema_linker_db_schema`, `user_question`, `row_guardrails` |
+| `zero_shot` | `schema_linker_db_schema`, `user_question`, `row_guardrails`, `fk_guardrails` |
 | `few_shot` | above + `example_selector_examples` |
 
 **Guardrail — Layer 2 (prompt constraint):**
 
-Both templates include a `row_guardrails` block that renders mandatory filter instructions for the LLM:
+Both templates include a `row_guardrails` block that renders mandatory filter instructions for the LLM, plus an `fk_guardrails` block that instructs the LLM to add subquery filters when querying FK-related tables without joining their parent:
 
 ```jinja
 {% if row_guardrails %}
@@ -226,10 +249,14 @@ Both templates include a `row_guardrails` block that renders mandatory filter in
 Your SQL MUST enforce the following filters — do not omit them under any circumstances:
 {% for table, filters in row_guardrails.items() %}{% for col, val in filters.items() %}- {{ table }}.{{ col }} = '{{ val }}'
 {% endfor %}{% endfor %}
+{% if fk_guardrails %}- When querying the following tables without joining their parent table, you MUST add a subquery filter:
+  - Certification: WHERE EmployeeId IN (SELECT EmployeeId FROM Employee WHERE ...)
+  - Benefits: WHERE EmployeeId IN (SELECT EmployeeId FROM Employee WHERE ...)
+{% endif %}
 {% endif %}
 ```
 
-This is a cooperative constraint — it relies on LLM compliance. Layer 3 (SQLExecutor) is the hard enforcement backstop.
+This is a cooperative constraint — it relies on LLM compliance. Layers 3a and 3b (SQLExecutor) are the hard enforcement backstop.
 
 Post-processing: LLM output is stripped of markdown fences (` ```sql ``` `) and collapsed to a single line.
 
@@ -255,13 +282,13 @@ Skipped when `max_correction_attempts = 0` (operator not added to operator list)
 | `temperature` | `float [0, 2]` | yes |
 | `random_seed` | `int \| None` | no |
 
-**Context writes:** `sql_query` (corrected in-place), `sql_corrector_sql_query`, `sql_corrector_is_successful`, per-attempt metadata
+**Context writes:** `sql_query` (corrected in-place), `sql_corrector_sql_query`, `sql_corrector_is_successful`, `sql_corrector_prompt`, `sql_corrector_num_attempts`, `sql_corrector_latency`, `sql_corrector_num_input_tokens`, `sql_corrector_num_output_tokens`
 
 ---
 
 ### 6. SQLExecutor
 
-The final operator. Enforces row-level guardrails deterministically at the AST level, then executes the SQL and writes results.
+Enforces row-level guardrails deterministically at the AST level, then executes the SQL and writes results.
 
 **Config (`SQLExecutorConfig`):**
 
@@ -270,16 +297,35 @@ The final operator. Enforces row-level guardrails deterministically at the AST l
 | `db_file_path` | `str` | yes |
 | `dbms` | `DBMS` | yes |
 
-**Guardrail — Layer 3 (AST injection — hard enforcement):**
+**Guardrail — Layer 3a (direct AST injection — hard enforcement):**
 
-`_inject_guardrails()` uses sqlglot to:
+`_inject_guardrails()` handles tables that contain the guardrailed column directly (e.g., Employee.Department). It uses sqlglot to:
 1. Parse the SQL into an AST (`parse_one`)
-2. Build a map of `table_name.lower() → alias_or_name` by walking `exp.Table` nodes
+2. Build a map of `table_name.lower() → alias_or_name` by walking `exp.Table` nodes, **skipping tables nested inside subqueries** (via `_is_inside_subquery` parent walk) — this prevents injecting a WHERE condition on the outer query for a table that only appears inside a subquery (e.g., if the LLM already added `WHERE EmployeeId IN (SELECT ... FROM Employee ...)`, Employee is not a real outer FROM/JOIN table)
 3. For each `(table, {col: val})` pair in `row_guardrails`, construct an `exp.EQ` condition referencing the alias
 4. Inject conditions that are missing into the WHERE clause (appended with AND), or create a new WHERE clause if none exists
 5. Serialize back to SQL in the target dialect
 
 If sqlglot cannot parse the SQL, the original string is returned as-is (DB will surface the error). This layer runs regardless of LLM behaviour — it is not bypassable by prompt manipulation.
+
+**Guardrail — Layer 3b (FK-aware AST injection — hard enforcement):**
+
+`_inject_fk_guardrails()` handles tables that don't have the guardrailed column but reference a table that does via foreign key (e.g., Certification → Employee). It uses `fk_guardrails` to know which child tables link to which parent tables.
+
+For each FK-guardrailed table present in the query:
+1. Check whether the parent table (e.g., Employee) is already in the query
+2. If the parent **is** present → skip (Layer 3a already injected the direct filter on the parent)
+3. If the parent is **not** present → inject a subquery condition: `WHERE <alias>.<fk_column> IN (SELECT <ref_column> FROM <parent> WHERE <parent>.<col> = '<val>')`
+
+Example: LLM generates `SELECT * FROM Certification` (no Employee JOIN). Layer 3b rewrites it to:
+```sql
+SELECT * FROM Certification
+WHERE Certification.EmployeeId IN (
+  SELECT EmployeeId FROM Employee WHERE Employee.Department = 'Marketing'
+)
+```
+
+Both 3a and 3b run sequentially on every query. If sqlglot cannot parse the SQL, the original string is returned as-is.
 
 On execution error: writes the error string to `sql_executor_error` and zero-fills the result fields; does not raise — callers handle gracefully.
 
@@ -287,32 +333,74 @@ On execution error: writes the error string to `sql_executor_error` and zero-fil
 
 ---
 
+### 7. AnswerGenerator
+
+The final operator. Takes the user's original question and the SQL query results, sends them to an LLM, and produces a natural language answer.
+
+Skipped when the pipeline was early-stopped (out-of-scope question), when SQL execution failed, or when the query returned zero rows — in those cases no LLM call is made and no answer is written.
+
+**Config (`AnswerGeneratorConfig`):**
+
+| Key | Type | Required |
+|---|---|---|
+| `chat_completion_model_provider` | `ModelProvider` | yes |
+| `chat_completion_model_name` | model enum | yes |
+| `temperature` | `float [0, 2]` | yes |
+
+**Prompt template (`answer.jinja`):**
+
+Receives `user_question`, `sql_executor_sql_query`, `sql_executor_columns`, and `sql_executor_rows`. Formats the results as a readable list and asks the LLM to answer the question based on the data. Instructs the LLM to keep the answer brief and avoid SQL or technical details.
+
+**Context writes:** `answer_generator_answer` (str), `answer_generator_prompt` (str), plus prefixed LLM metadata keys
+
+---
+
 ## Guardrails
 
-Four independent, layered defences — one intent gate plus three data-scoping layers:
+Five independent, layered defences — one intent gate plus four data-scoping layers:
 
 | Layer | Operator | Mechanism | Strength |
 |---|---|---|---|
 | 0 — Intent gate | IntentGuardrail | LLM classifies whether the question is in-domain (employees / certifications / benefits). Out-of-scope questions halt the pipeline before any SQL is generated. | Soft — LLM-dependent; fails open on parse error to avoid blocking valid questions |
-| 1 — Schema restriction | SchemaLinker | `accessible_schema` hides entire tables/columns from the LLM. It never sees what isn't in the allowlist. | Hard — the LLM cannot reference what it cannot see |
-| 2 — Prompt constraint | SQLGenerator | `row_guardrails` rendered into the prompt as mandatory filter instructions | Soft — relies on LLM compliance |
-| 3 — AST injection | SQLExecutor | sqlglot parses the SQL and injects missing WHERE conditions before execution | Hard — deterministic, LLM-independent, runs on every query |
+| 1 — Schema restriction | SchemaLinker | `schema_guardrails` hides entire tables/columns from the LLM. It never sees what isn't in the allowlist. | Hard — the LLM cannot reference what it cannot see |
+| 2 — Prompt constraint | SQLGenerator | `row_guardrails` and `fk_guardrails` rendered into the prompt as mandatory filter instructions | Soft — relies on LLM compliance |
+| 3a — Direct AST injection | SQLExecutor | sqlglot parses the SQL and injects missing WHERE conditions on tables that contain the guardrailed column (e.g., `Employee.Department = 'X'`) | Hard — deterministic, LLM-independent, runs on every query |
+| 3b — FK-aware AST injection | SQLExecutor | sqlglot detects FK-related tables (Certification, Benefits) queried without their parent (Employee) and injects a subquery filter: `WHERE EmployeeId IN (SELECT EmployeeId FROM Employee WHERE Department = 'X')` | Hard — deterministic, LLM-independent, runs on every query |
 
 In the default app configuration:
 - Layer 0 is always active (IntentGuardrail is always first in the operator list)
-- Layer 1 is optional (pass `accessible_schema=None` to skip)
-- Layers 2 and 3 are always active when `row_guardrails` is set
-- SQLExecutor's Layer 3 is the last line of defence — not bypassable by prompt manipulation
+- Layer 1 is optional (pass `schema_guardrails=None` to skip)
+- Layers 2, 3a, and 3b are always active when `row_guardrails` / `fk_guardrails` are set
+- SQLExecutor's Layers 3a and 3b are the last line of defence — not bypassable by prompt manipulation
 
 **Examples:**
 
 - **Layer 0 (intent gate):** User asks *"What's the weather?"* → LLM flags out of scope → pipeline stops immediately, no SQL generated.
 
-- **Layer 1 (schema restriction):** `accessible_schema = {"Employee": ["*"]}` → Benefits and Certification tables are hidden. The LLM physically cannot reference them — they don't exist in the schema it sees.
+- **Layer 1 (schema restriction):** `schema_guardrails = {"Employee": ["*"]}` → Benefits and Certification tables are hidden. The LLM physically cannot reference them — they don't exist in the schema it sees.
 
-- **Layer 2 (prompt constraint):** Session is locked to Marketing. The prompt includes *"Your SQL MUST enforce: Employee.Department = 'Marketing'"*. LLM cooperates and adds the filter itself.
+- **Layer 2 (prompt constraint):** Session is locked to Marketing. The prompt includes:
+  - *"Your SQL MUST enforce: Employee.Department = 'Marketing'"*
+  - *"When querying Certification without joining Employee, add: WHERE EmployeeId IN (SELECT EmployeeId FROM Employee WHERE Employee.Department = 'Marketing')"*
 
-- **Layer 3 (AST injection):** Same session. LLM generates `SELECT Name FROM Employee ORDER BY SalaryAmount DESC LIMIT 1` (forgot the filter). SQLExecutor rewrites it to `SELECT Name FROM Employee WHERE Employee.Department = 'Marketing' ORDER BY SalaryAmount DESC LIMIT 1` before touching the database. Cross-department leakage is impossible.
+  LLM cooperates and adds the filter itself.
+
+- **Layer 3a (direct AST injection):** LLM generates `SELECT Name FROM Employee ORDER BY SalaryAmount DESC LIMIT 1` (forgot the department filter). SQLExecutor rewrites it to:
+  ```sql
+  SELECT Name FROM Employee WHERE Employee.Department = 'Marketing' ORDER BY SalaryAmount DESC LIMIT 1
+  ```
+
+- **Layer 3b (FK-aware AST injection):** LLM generates `SELECT * FROM Certification` (no Employee JOIN, no department filter). SQLExecutor detects that Certification is an FK-related table and Employee is missing from the query, so it injects a subquery:
+  ```sql
+  SELECT * FROM Certification
+  WHERE Certification.EmployeeId IN (
+    SELECT EmployeeId FROM Employee WHERE Employee.Department = 'Marketing'
+  )
+  ```
+
+  If the LLM had JOINed Employee instead (`SELECT c.* FROM Certification c JOIN Employee e ON ...`), Layer 3b skips the subquery and Layer 3a handles it by injecting `e.Department = 'Marketing'` directly.
+
+Cross-department leakage is impossible regardless of which tables the LLM queries or whether it remembers to JOIN Employee.
 
 ---
 
@@ -322,8 +410,11 @@ In the default app configuration:
 
 Owns session state for one department-scoped session:
 
-- `__init__(config_path, department)`: Loads `config.yaml`, validates the department against `DEPARTMENTS = ["Engineering", "Sales", "Marketing"]`, falls back to `random.choice` if invalid/missing, logs the selection, constructs `row_guardrails`, builds `NL2SQLPipeline`.
-- `ask(user_question) -> dict`: Delegates to `pipeline.execute(user_question, row_guardrails=self._row_guardrails)` and returns the full context dict.
+- `__init__(config_path, department)`: Loads `config.yaml`, validates the department against `DEPARTMENTS = ["Engineering", "Sales", "Marketing"]`, falls back to `random.choice` if invalid/missing, logs the selection, constructs all three guardrail dicts, builds `NL2SQLPipeline`.
+- `schema_guardrails`: `{"Employee": ["*"], "Certification": ["*"], "Benefits": ["*"]}` — all tables and columns are visible. To restrict access, replace `"*"` with a list of allowed column names or remove a table entirely (the LLM will never see hidden tables/columns).
+- `row_guardrails`: `{"Employee": {"Department": "<selected>"}}` — direct column filter on the Employee table.
+- `fk_guardrails`: `{"Certification": {"fk_column": "EmployeeId", "ref_table": "Employee", "ref_column": "EmployeeId"}, "Benefits": {...same...}}` — declares that Certification and Benefits link to Employee via EmployeeId, enabling Layer 3b subquery injection.
+- `ask(user_question) -> dict`: Delegates to `pipeline.execute(user_question, schema_guardrails=..., row_guardrails=..., fk_guardrails=...)` and returns the full context dict.
 - `department` property: Exposes the selected department name.
 
 ### `cli.py` — Terminal REPL
@@ -343,7 +434,7 @@ Three-phase flow:
    - `st.warning(...)` if `early_stop` is set (out-of-scope rejection)
    - `st.error(...)` if a SQL execution error occurred
    - `st.info("No results found.")` for empty result sets
-   - `st.dataframe(...)` with SQL + row count + latency caption otherwise
+   - Natural language answer (from `answer_generator_answer`) + `st.dataframe(...)` with SQL + row count + latency caption otherwise
 
 `@st.cache_resource` keyed by department string ensures each department reuses its `NL2SQLApp` instance across reruns.
 
@@ -395,65 +486,8 @@ Structured JSON logging via loguru:
 logger = Logger(__name__)
 logger.log("info", "EVENT_NAME", {"key": "value"})
 ```
-
----
-
-## Supported LLM Providers
-
-| Provider | Chat Completion | Embeddings |
-|---|---|---|
-| OpenAI | yes | yes |
-| Ollama (local) | yes | yes |
-| Anthropic | yes | no |
-| HuggingFace | yes | yes |
-
-Provider and model are independently configurable per operator — e.g. use Ollama for schema linking and OpenAI for SQL generation.
-
 ---
 
 ## Configuration Reference
 
-`config.yaml` — all keys map 1:1 to Pydantic models in `pipeline/config.py`, validated at startup:
-
-```yaml
-nl2sql_pipeline:
-  intent_guardrail:
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
-
-  schema_linker:
-    db_file_path: data/employees.db      # path to SQLite file (must exist)
-    technique: full                       # "full" | "tcsl" | "scsl"
-    model_provider: openai               # required for tcsl/scsl
-    model_name: gpt-5.4-mini             # required for tcsl/scsl
-
-  example_selector:
-    technique: question_similarity        # "random" | "question_similarity"
-    number_of_examples: 3
-    embedding_model_provider: openai     # required for question_similarity
-    embedding_model_name: text-embedding-3-small
-    random_seed: null                    # integer or null
-
-  sql_generator:
-    prompt_template: zero_shot           # "zero_shot" | "few_shot"
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
-    random_seed: null
-
-  sql_corrector:
-    max_correction_attempts: 2           # 0 disables the operator entirely
-    prompt_template: syntax_correction   # "syntax_correction"
-    dbms: sqlite                         # "sqlite" | "duckdb"
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
-    random_seed: null
-
-  sql_executor:
-    db_file_path: data/employees.db
-    dbms: sqlite                         # "sqlite" | "duckdb"
-```
-
-`example_selector` must always be present in the YAML even when `sql_generator.prompt_template = zero_shot` — it is skipped at runtime but still parsed by Pydantic.
+`config.yaml` — all keys map 1:1 to Pydantic models in `pipeline/config.py`, validated at startup.

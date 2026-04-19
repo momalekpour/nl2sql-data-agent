@@ -22,7 +22,7 @@ uv sync --all-extras
 This will automatically create and manage a virtual environment and fetch the appropriate Python version. No manual activation is needed — the run scripts use `uv run` to execute within the environment.
 
 <details>
-<summary>Contributing / development setup</summary>
+<summary>development setup</summary>
 
 Install the `pre-commit` hooks for automatic linting (`ruff`) and formatting (`black`):
 
@@ -34,7 +34,7 @@ uv run pre-commit install
 
 ## How to Run
 
-**1. Configure API Keys**
+**1. Set Environment Variables**
 
 Copy the example environment file and add your API key:
 
@@ -42,9 +42,7 @@ Copy the example environment file and add your API key:
 cp .env.example .env
 ```
 
-Edit `.env` and set your `OPENAI_API_KEY` (or whichever provider you configured in `config.yaml`).
-
-> **Note:** The first run may take a moment — the BIRD dataset is downloaded and cached locally for few-shot examples.
+Edit `.env` and set your `OPENAI_API_KEY`.
 
 **2. Run the Web UI** _(recommended)_
 
@@ -64,16 +62,17 @@ On startup, select a department (Engineering, Sales, Marketing, or Random). All 
 
 ## Architecture
 
-See [`docs/architecture.md`](docs/architecture.md) for full details. The application is built around a **composable operator pipeline** configured via `config.yaml`. Each operator implements an `execute(context)` method that reads from and writes to a shared context dictionary. The pipeline runs the following operators in order:
+See [`docs/architecture.md`](docs/architecture.md) for full details. The application is built around a **composable operator pipeline** configured via `config.yaml` — each operator's model provider, technique, and behaviour is plug-and-play; the default setup is ready to run as-is. Each operator implements an `execute(context)` method that reads from and writes to a shared context dictionary. The pipeline runs the following operators in order:
 
 1. **IntentGuardrail** - LLM-based scope classifier; rejects out-of-scope questions via early-stop
 2. **SchemaLinker** - Resolves which tables/columns are relevant to the question
 3. **ExampleSelector** - Retrieves similar few-shot examples (skipped in zero-shot mode)
 4. **SQLGenerator** - LLM generates a SQL query from the question, schema, and examples
 5. **SQLCorrector** - Validates and auto-corrects SQL errors via retry loop
-6. **SQLExecutor** - Executes the final SQL; injects row-level guardrails (department filter) into the AST via sqlglot
+6. **SQLExecutor** - Executes the final SQL; enforces department guardrails via two AST-level injections: direct `WHERE` on Employee, and subquery `IN (...)` for Certification/Benefits when queried without a JOIN
+7. **AnswerGenerator** - LLM summarises the query results into a natural language answer
 
-Department enforcement uses a four-layer guardrail system: intent gating, schema restriction, prompt-level constraints, and AST-level WHERE clause injection.
+Department enforcement uses a five-layer guardrail system: intent gating, schema restriction, prompt-level constraints, direct AST WHERE injection, and FK-aware subquery injection. See [`docs/architecture.md#guardrails`](docs/architecture.md#guardrails) for details.
 
 ## AI Tools Used
 
