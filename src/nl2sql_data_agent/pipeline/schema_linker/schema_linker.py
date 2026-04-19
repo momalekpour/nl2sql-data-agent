@@ -4,7 +4,7 @@ import os
 from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 from nl2sql_data_agent.core.database.database_handler import DatabaseHandler, DBMS
 from nl2sql_data_agent.core.logger import logger
@@ -38,8 +38,8 @@ class Column:
 @dataclass
 class Table:
     table_name: str
-    columns: List[Column]
-    primary_keys: List[Column]
+    columns: list[Column]
+    primary_keys: list[Column]
 
 
 @dataclass
@@ -51,7 +51,7 @@ class ForeignKey:
 
 
 class SchemaLinker(Operator):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         db_file_path = config["db_file_path"]
         if not os.path.isfile(db_file_path):
@@ -60,14 +60,14 @@ class SchemaLinker(Operator):
                 "sqlite3.connect() silently creates an empty DB for missing paths — pass a valid file."
             )
         self.db_file_path = db_file_path
-        self.tables: List[Table] = []
-        self.foreign_keys: List[ForeignKey] = []
+        self.tables: list[Table] = []
+        self.foreign_keys: list[ForeignKey] = []
         self._prompt_renderer = PromptRenderer(
             templates_dir_path="src/nl2sql_data_agent/pipeline/schema_linker/prompt_templates"
         )
         self._read_schema()
 
-    def execute(self, context: Dict[str, Any]) -> None:
+    def execute(self, context: dict[str, Any]) -> None:
         try:
             technique = self.config["technique"]
             technique_map = {
@@ -77,8 +77,8 @@ class SchemaLinker(Operator):
             }
             method = technique_map[technique]
             schema, columns = method(**self.config, **context)
-            context["schema_linker_schema"] = schema
-            context["schema_linker_columns"] = columns
+            context["schema_linker_db_schema"] = schema
+            context["schema_linker_db_columns"] = columns
         except Exception as e:
             logger.log("error", "ERROR_IN_SCHEMA_LINKER_OPERATOR", {"error": str(e)})
             raise
@@ -164,7 +164,7 @@ class SchemaLinker(Operator):
 
     def _format_schema_description(
         self,
-        tables: List[Table],
+        tables: list[Table],
         columns_filter: dict[str, list[str]] | None = None,
         include_schema_overview: bool = True,
     ) -> str:
@@ -272,7 +272,7 @@ class SchemaLinker(Operator):
 
     def _restrict_to_accessible(
         self, accessible_schema: dict[str, list[str]]
-    ) -> List[Table]:
+    ) -> list[Table]:
         """Return a filtered copy of self.tables restricted to accessible_schema.
         Never mutates self.tables or any Table/Column objects."""
         result = []
@@ -344,7 +344,7 @@ class SchemaLinker(Operator):
         user_question: str,
         llm_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
-        candidate_tables: List[Table] | None = None,
+        candidate_tables: list[Table] | None = None,
     ) -> tuple[list[Table], str]:
         tables = candidate_tables if candidate_tables is not None else self.tables
         full_schema = self._format_schema_description(
@@ -378,7 +378,7 @@ class SchemaLinker(Operator):
     def extract_relevant_columns(
         self,
         filtered_tables_schema: str,
-        filtered_tables: List[Table],
+        filtered_tables: list[Table],
         user_question: str,
         llm_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
@@ -401,20 +401,26 @@ class SchemaLinker(Operator):
         data = json.loads(llm_response)
 
         all_filtered_columns = {}
+        result_tables = []
         for table in filtered_tables:
             if table.table_name in data:
+                allowed = set(data[table.table_name])
                 all_filtered_columns[table.table_name] = [
                     col
                     for col in data[table.table_name]
-                    if col in [c.column_name for c in table.columns]
+                    if col in {c.column_name for c in table.columns}
                 ]
-                table.columns = [
-                    column
-                    for column in table.columns
-                    if column.column_name in data[table.table_name]
+                filtered = copy(table)
+                filtered.columns = [
+                    c for c in table.columns if c.column_name in allowed
                 ]
+                filtered.primary_keys = [
+                    pk for pk in table.primary_keys if pk.column_name in allowed
+                ]
+                if filtered.columns:
+                    result_tables.append(filtered)
 
-        filtered_tables_columns = [t for t in filtered_tables if t.columns]
+        filtered_tables_columns = result_tables
         schema_description = self._format_schema_description(
             tables=filtered_tables_columns,
             columns_filter=all_filtered_columns,
@@ -520,9 +526,9 @@ if __name__ == "__main__":
     linker = SchemaLinker(
         config={"db_file_path": db_file_path, "technique": SchemaLinkingTechnique.FULL}
     )
-    ctx: Dict[str, Any] = {}
+    ctx: dict[str, Any] = {}
     linker.execute(ctx)
-    print(ctx["schema_linker_schema"])
+    print(ctx["schema_linker_db_schema"])
 
     print("--------\nFull Schema (restricted)")
     linker = SchemaLinker(
@@ -534,8 +540,8 @@ if __name__ == "__main__":
     )
     ctx = {}
     linker.execute(ctx)
-    print(ctx["schema_linker_schema"])
-    print("Columns by table:", ctx["schema_linker_columns"])
+    print(ctx["schema_linker_db_schema"])
+    print("Columns by table:", ctx["schema_linker_db_columns"])
 
     # TCSL — LLM only sees accessible tables/columns
     print("--------\nTCSL (restricted)")
@@ -550,8 +556,8 @@ if __name__ == "__main__":
     )
     ctx = {"user_question": question}
     linker.execute(ctx)
-    print(ctx["schema_linker_schema"])
-    print("Columns by table:", ctx["schema_linker_columns"])
+    print(ctx["schema_linker_db_schema"])
+    print("Columns by table:", ctx["schema_linker_db_columns"])
 
     # SCSL — LLM evaluates columns only within accessible set
     print("--------\nSCSL (restricted)")
@@ -566,5 +572,5 @@ if __name__ == "__main__":
     )
     ctx = {"user_question": question}
     linker.execute(ctx)
-    print(ctx["schema_linker_schema"])
-    print("Columns by table:", ctx["schema_linker_columns"])
+    print(ctx["schema_linker_db_schema"])
+    print("Columns by table:", ctx["schema_linker_db_columns"])

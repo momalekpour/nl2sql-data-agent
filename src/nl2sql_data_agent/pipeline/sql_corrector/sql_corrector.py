@@ -1,5 +1,5 @@
 import enum
-from typing import Dict, Any
+from typing import Any
 
 import sqlglot
 from sqlglot.errors import ParseError
@@ -19,7 +19,7 @@ class SQLCorrectionPromptTemplate(enum.Enum):
 
 
 class SQLCorrector(Operator):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.prompt_renderer = PromptRenderer(
             templates_dir_path="src/nl2sql_data_agent/pipeline/sql_corrector/prompt_templates"
@@ -30,7 +30,7 @@ class SQLCorrector(Operator):
             model_name=self.config["chat_completion_model_name"],
         )
 
-    def execute(self, context: Dict[str, Any]) -> None:
+    def execute(self, context: dict[str, Any]) -> None:
         try:
             technique_map = {
                 SQLCorrectionPromptTemplate.SYNTAX_CORRECTION: self._correct_sql_syntax,
@@ -49,7 +49,7 @@ class SQLCorrector(Operator):
         user_question: str,
         sql_query: str,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         attempt = 0
         is_parsable = False
         total_latency = 0

@@ -1,4 +1,4 @@
-from typing import Union
+from __future__ import annotations
 
 from nl2sql_data_agent.core.database.database_handler import DBMS
 from nl2sql_data_agent.core.model_manager import ModelProvider, OllamaModel, OpenAIModel
@@ -10,11 +10,17 @@ from nl2sql_data_agent.pipeline.sql_corrector import SQLCorrectionPromptTemplate
 from nl2sql_data_agent.pipeline.sql_generator import SQLGenerationPromptTemplate
 
 
+class IntentGuardrailConfig(BaseModel):
+    chat_completion_model_provider: ModelProvider
+    chat_completion_model_name: OllamaModel | OpenAIModel
+    temperature: confloat(ge=0, le=2)
+
+
 class SchemaLinkerConfig(BaseModel):
     db_file_path: str
     technique: SchemaLinkingTechnique
     model_provider: ModelProvider | None = None
-    model_name: Union[OllamaModel, OpenAIModel] | None = None
+    model_name: OllamaModel | OpenAIModel | None = None
 
     @model_validator(mode="after")
     def validate_technique_fields(self):
@@ -30,7 +36,7 @@ class ExampleSelectorConfig(BaseModel):
     technique: ExampleSelectionTechnique
     number_of_examples: int
     embedding_model_provider: ModelProvider | None = None
-    embedding_model_name: Union[OllamaModel, OpenAIModel] | None = None
+    embedding_model_name: OllamaModel | OpenAIModel | None = None
     random_seed: int | None = None
 
     @model_validator(mode="after")
@@ -46,7 +52,7 @@ class ExampleSelectorConfig(BaseModel):
 class SQLGeneratorConfig(BaseModel):
     prompt_template: SQLGenerationPromptTemplate
     chat_completion_model_provider: ModelProvider
-    chat_completion_model_name: Union[OllamaModel, OpenAIModel]
+    chat_completion_model_name: OllamaModel | OpenAIModel
     temperature: confloat(ge=0, le=2)
     random_seed: int | None
 
@@ -56,13 +62,20 @@ class SQLCorrectorConfig(BaseModel):
     max_correction_attempts: int
     dbms: DBMS
     chat_completion_model_provider: ModelProvider
-    chat_completion_model_name: Union[OllamaModel, OpenAIModel]
+    chat_completion_model_name: OllamaModel | OpenAIModel
     temperature: confloat(ge=0, le=2)
     random_seed: int | None
 
 
+class SQLExecutorConfig(BaseModel):
+    db_file_path: str
+    dbms: DBMS
+
+
 class NL2SQLPipelineConfig(BaseModel):
+    intent_guardrail: IntentGuardrailConfig
     schema_linker: SchemaLinkerConfig
     example_selector: ExampleSelectorConfig
     sql_generator: SQLGeneratorConfig
     sql_corrector: SQLCorrectorConfig
+    sql_executor: SQLExecutorConfig

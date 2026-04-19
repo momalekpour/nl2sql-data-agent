@@ -13,6 +13,12 @@ SQL: {{ example[2] }}
 This schema provides a detailed overview of the database’s structure, including tables, columns, primary/foreign keys, and relevant information regarding relationships or constraints. Focus on the description beside each column, they directly hint which columns are relevant for our question.
 {{ schema_linker_db_schema }}
 
+{% if row_guardrails %}
+### Mandatory Constraints ###
+Your SQL MUST enforce the following filters — do not omit them under any circumstances:
+{% for table, filters in row_guardrails.items() %}{% for col, val in filters.items() %}- {{ table }}.{{ col }} = '{{ val }}'
+{% endfor %}{% endfor %}
+{% endif %}
 ### Instructions ###
 1. When you need to find the highest or lowest values based on a certain condition, using ORDER BY + LIMIT 1 is prefered over using MAX/MIN within sub queries.
 2. If predicted query includes an ORDER BY clause to sort the results, you should only include the column(s) used for sorting in the SELECT clause if the question specifically ask for them. Otherwise, omit these columns from the SELECT.

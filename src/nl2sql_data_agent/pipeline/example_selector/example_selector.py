@@ -1,6 +1,6 @@
 import enum
 import random
-from typing import List, Tuple, Dict, Any, Union
+from typing import Any
 
 from nl2sql_data_agent.core.logger import Logger
 from nl2sql_data_agent.core.model_manager import ModelProvider, OpenAIModel, OllamaModel
@@ -19,10 +19,10 @@ class ExampleSelectionTechnique(enum.Enum):
 
 
 class ExampleSelector(Operator):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
 
-    def execute(self, context: Dict[str, Any]) -> None:
+    def execute(self, context: dict[str, Any]) -> None:
         try:
             technique = self.config["technique"]
 
@@ -41,7 +41,7 @@ class ExampleSelector(Operator):
         number_of_examples: int,
         random_seed: int | None = None,
         **kwargs,
-    ) -> List[Tuple[str, str | None, str]]:
+    ) -> list[tuple[str, str | None, str]]:
         examples_list = load_bird_mini_dev_examples()
 
         if random_seed is not None:
@@ -61,7 +61,7 @@ class ExampleSelector(Operator):
     def _select_example_by_question_similarity(
         number_of_examples: int,
         embedding_model_provider: ModelProvider,
-        embedding_model_name: Union[OllamaModel, OpenAIModel],
+        embedding_model_name: OllamaModel | OpenAIModel,
         user_question: str,
         **kwargs,
     ) -> list[tuple[str, str | None, str]]:
@@ -82,7 +82,7 @@ if __name__ == "__main__":
             "random_seed": 42,
         }
     )
-    context: Dict[str, Any] = {}
+    context: dict[str, Any] = {}
     selector.execute(context)
     for i, (question, evidence, sql) in enumerate(
         context["example_selector_examples"], 1
@@ -100,7 +100,7 @@ if __name__ == "__main__":
             "embedding_model_name": OpenAIModel.TEXT_EMBEDDING_3_SMALL,
         }
     )
-    similarity_context: Dict[str, Any] = {
+    similarity_context: dict[str, Any] = {
         "user_question": "What is the total revenue for each product category in 2023?"
     }
     similarity_selector.execute(similarity_context)

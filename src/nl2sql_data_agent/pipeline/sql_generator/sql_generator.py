@@ -1,5 +1,5 @@
 import enum
-from typing import Dict, Any
+from typing import Any
 
 from nl2sql_data_agent.core.logger import Logger
 from nl2sql_data_agent.core.model_manager import ModelManager, ModelType
@@ -16,7 +16,7 @@ class SQLGenerationPromptTemplate(enum.Enum):
 
 
 class SQLGenerator(Operator):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.prompt_renderer = PromptRenderer(
             templates_dir_path="src/nl2sql_data_agent/pipeline/sql_generator/prompt_templates"
@@ -27,7 +27,7 @@ class SQLGenerator(Operator):
             model_name=self.config["chat_completion_model_name"],
         )
 
-    def execute(self, context: Dict[str, Any]) -> None:
+    def execute(self, context: dict[str, Any]) -> None:
         try:
             prompt = self.prompt_renderer.render(
                 self.config["prompt_template"].value, context
