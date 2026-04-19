@@ -77,4 +77,4 @@ Department enforcement uses a five-layer guardrail system: intent gating, schema
 ## AI Tools Used
 
 - **GitHub Copilot** - Used for inline code suggestions and autocompletion in PyCharm IDE
-- **Claude Code** - Assisted with brainstorming, parts of the development including the web UI, codebase cleanup, and documentation
+- **Claude Code** - Assisted with brainstorming, parts of the development, codebase cleanup, and documentation
