@@ -1,7 +1,8 @@
-from loguru import logger
 import json
 import sys
 from threading import Lock
+
+from loguru import logger
 
 
 class Logger:
@@ -11,11 +12,22 @@ class Logger:
     def __init__(self, name: str = __name__, level: str = "DEBUG") -> None:
         with Logger._config_lock:
             if not Logger._configured:
+                import os
+
+                effective_level = os.environ.get("LOG_LEVEL", level).upper()
                 logger.remove()
+                fmt = (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                    "<level>{level: <8}</level> | "
+                    "<cyan>{module}</cyan>:"
+                    "<cyan>{function}</cyan>:"
+                    "<cyan>{line}</cyan> | "
+                    "<level>{message}</level>"
+                )
                 logger.add(
                     sys.stdout,
-                    level=str(level).upper(),
-                    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{module}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | <level>{message}</level>",
+                    level=effective_level,
+                    format=fmt,
                     colorize=True,
                 )
                 Logger._configured = True
