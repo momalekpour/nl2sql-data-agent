@@ -6,7 +6,7 @@ from copy import copy
 from dataclasses import dataclass
 from typing import Any
 
-from nl2sql_data_agent.core.database.database_handler import DatabaseHandler, DBMS
+from nl2sql_data_agent.core.database.database_handler import DBMS, DatabaseHandler
 from nl2sql_data_agent.core.logger import logger
 from nl2sql_data_agent.core.model_manager import OpenAIModel
 from nl2sql_data_agent.core.model_manager.model_manager import (
@@ -57,7 +57,8 @@ class SchemaLinker(Operator):
         if not os.path.isfile(db_file_path):
             raise FileNotFoundError(
                 f"SQLite database file not found: '{db_file_path}'. "
-                "sqlite3.connect() silently creates an empty DB for missing paths — pass a valid file."
+                "sqlite3.connect() silently creates an empty DB for missing paths"
+                " — pass a valid file."
             )
         self.db_file_path = db_file_path
         self.tables: list[Table] = []
@@ -85,24 +86,24 @@ class SchemaLinker(Operator):
 
     def _link_full(
         self,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
         **kwargs,
     ) -> tuple[str, dict[str, list[str]]]:
-        return self.get_full_schema_representation(accessible_schema=accessible_schema)
+        return self.get_full_schema_representation(schema_guardrails=schema_guardrails)
 
     def _link_tcsl(
         self,
         model_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
         user_question: str,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
         **kwargs,
     ) -> tuple[str, dict[str, list[str]]]:
         return self.get_TCSL_filtered_schema_representation(
             user_question=user_question,
             model_provider=model_provider,
             model_name=model_name,
-            accessible_schema=accessible_schema,
+            schema_guardrails=schema_guardrails,
         )
 
     def _link_scsl(
@@ -110,21 +111,22 @@ class SchemaLinker(Operator):
         model_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
         user_question: str,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
         **kwargs,
     ) -> tuple[str, dict[str, list[str]]]:
         return self.get_SCSL_filtered_schema_representation(
             user_question=user_question,
             model_provider=model_provider,
             model_name=model_name,
-            accessible_schema=accessible_schema,
+            schema_guardrails=schema_guardrails,
         )
 
     def _read_schema(self):
         db = DatabaseHandler(DBMS.SQLITE, {"db_path": self.db_file_path})
         try:
             _, table_rows = db.run_query(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master"
+                " WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
             table_names = [row[0] for row in table_rows]
             column_map: dict[tuple[str, str], Column] = {}
@@ -221,7 +223,10 @@ class SchemaLinker(Operator):
             if table_foreign_keys:
                 schema_description += "  Foreign keys:\n"
                 for fk_column, fk_table, fk_referenced_column in table_foreign_keys:
-                    schema_description += f"    - '{fk_column}' referencing column '{fk_referenced_column}' in table '{fk_table}'\n"
+                    schema_description += (
+                        f"    - '{fk_column}' referencing column"
+                        f" '{fk_referenced_column}' in table '{fk_table}'\n"
+                    )
 
         if include_schema_overview:
             schema_description += "\nSchema Overview:\n"
@@ -270,16 +275,16 @@ class SchemaLinker(Operator):
             response = response[:-3]
         return response.strip()
 
-    def _restrict_to_accessible(
-        self, accessible_schema: dict[str, list[str]]
+    def _apply_schema_guardrails(
+        self, schema_guardrails: dict[str, list[str]]
     ) -> list[Table]:
-        """Return a filtered copy of self.tables restricted to accessible_schema.
+        """Return a filtered copy of self.tables restricted to schema_guardrails.
         Never mutates self.tables or any Table/Column objects."""
         result = []
         for table in self.tables:
-            if table.table_name not in accessible_schema:
+            if table.table_name not in schema_guardrails:
                 continue
-            allowed = accessible_schema[table.table_name]
+            allowed = schema_guardrails[table.table_name]
             restricted = copy(table)
             if "*" not in allowed:
                 allowed_set = set(allowed)
@@ -295,11 +300,11 @@ class SchemaLinker(Operator):
 
     def get_full_schema_representation(
         self,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
     ) -> tuple[str, dict[str, list[str]]]:
         tables = (
-            self._restrict_to_accessible(accessible_schema)
-            if accessible_schema
+            self._apply_schema_guardrails(schema_guardrails)
+            if schema_guardrails
             else self.tables
         )
         all_columns = {
@@ -433,11 +438,11 @@ class SchemaLinker(Operator):
         user_question: str,
         model_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
     ) -> tuple[str, dict[str, list[str]]]:
         candidate_tables = (
-            self._restrict_to_accessible(accessible_schema)
-            if accessible_schema
+            self._apply_schema_guardrails(schema_guardrails)
+            if schema_guardrails
             else None
         )
         filtered_tables, filtered_tables_schema = self.extract_relevant_tables(
@@ -457,7 +462,7 @@ class SchemaLinker(Operator):
         user_question: str,
         model_provider: ModelProvider,
         model_name: OpenAIModel | OllamaModel,
-        accessible_schema: dict[str, list[str]] | None = None,
+        schema_guardrails: dict[str, list[str]] | None = None,
     ) -> tuple[str, dict[str, list[str]]]:
         llm = ModelManager.create_model(
             model_provider=model_provider,
@@ -468,8 +473,8 @@ class SchemaLinker(Operator):
         relevant_columns: dict[str, list[str]] = defaultdict(list)
         relevant_tables: set[str] = set()
         candidate_tables = (
-            self._restrict_to_accessible(accessible_schema)
-            if accessible_schema
+            self._apply_schema_guardrails(schema_guardrails)
+            if schema_guardrails
             else self.tables
         )
 
@@ -516,7 +521,7 @@ if __name__ == "__main__":
     db_file_path = "data/employees.db"
     question = "What is the name of the employee with the highest salary?"
 
-    accessible_schema = {
+    schema_guardrails = {
         "Employee": ["EmployeeId", "Name", "SalaryAmount", "Role"],
         "Certification": ["CertificationId"],
     }
@@ -535,7 +540,7 @@ if __name__ == "__main__":
         config={
             "db_file_path": db_file_path,
             "technique": SchemaLinkingTechnique.FULL,
-            "accessible_schema": accessible_schema,
+            "schema_guardrails": schema_guardrails,
         }
     )
     ctx = {}
@@ -551,7 +556,7 @@ if __name__ == "__main__":
             "technique": SchemaLinkingTechnique.TCSL,
             "model_provider": ModelProvider.OPENAI,
             "model_name": OpenAIModel.GPT_54_MINI,
-            "accessible_schema": accessible_schema,
+            "schema_guardrails": schema_guardrails,
         }
     )
     ctx = {"user_question": question}
@@ -567,7 +572,7 @@ if __name__ == "__main__":
             "technique": SchemaLinkingTechnique.SCSL,
             "model_provider": ModelProvider.OPENAI,
             "model_name": OpenAIModel.GPT_54_MINI,
-            "accessible_schema": accessible_schema,
+            "schema_guardrails": schema_guardrails,
         }
     )
     ctx = {"user_question": question}
