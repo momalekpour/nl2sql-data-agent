@@ -1,39 +1,39 @@
 # NL2SQL pipeline configuration
 nl2sql_pipeline:
   intent_guardrail:
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
+    chat_completion_model_provider: openai      # LLM provider: "openai", "anthropic", "ollama"
+    chat_completion_model_name: gpt-4o-mini     # Model name for the provider above
+    temperature: 0                              # 0 = deterministic; range 0–2
 
   schema_linker:
-    db_file_path: data/employees.db         # required: path to SQLite file
-    technique: full                            # Options: "full", "tcsl", "scsl"
-    model_provider: openai                     # required for tcsl/scsl
-    model_name: gpt-5.4-mini                   # required for tcsl/scsl
+    db_file_path: data/employees.db            # Path to the SQLite database file
+    technique: full                            # "full" = pass entire schema; "tcsl"/"scsl" = LLM-driven selection
+    model_provider: openai                     # Required only for tcsl/scsl techniques
+    model_name: gpt-4o-mini                    # Required only for tcsl/scsl techniques
 
   example_selector:
-    technique: question_similarity             # Options: "random", "question_similarity"
-    number_of_examples: 3
-    embedding_model_provider: openai           # required for question_similarity
-    embedding_model_name: text-embedding-3-small
-    random_seed: null                          # optional: integer or null
+    technique: question_similarity             # "random" = random sample; "question_similarity" = embedding-based
+    number_of_examples: 3                      # Number of few-shot examples to retrieve
+    embedding_model_provider: openai           # Required for question_similarity technique
+    embedding_model_name: text-embedding-3-small  # Embedding model to use
+    random_seed: null                          # Integer for reproducibility, or null
 
   sql_generator:
-    prompt_template: zero_shot                 # Options: "zero_shot", "few_shot"
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
-    random_seed: null
+    prompt_template: zero_shot                 # "zero_shot" = no examples; "few_shot" = use example_selector output
+    chat_completion_model_provider: openai     # LLM provider
+    chat_completion_model_name: gpt-4o-mini    # Model name
+    temperature: 0                             # 0 = deterministic
+    random_seed: null                          # Integer for reproducibility, or null
 
   sql_corrector:
-    max_correction_attempts: 2                 # 0 disables correction
-    prompt_template: syntax_correction         # Options: "syntax_correction"
-    dbms: sqlite                               # Options: "sqlite", "duckdb"
-    chat_completion_model_provider: openai
-    chat_completion_model_name: gpt-5.4-mini
-    temperature: 0
-    random_seed: null
+    max_correction_attempts: 2                 # Number of retry attempts; 0 = disabled
+    prompt_template: syntax_correction         # Correction prompt style; currently only "syntax_correction"
+    dbms: sqlite                               # Target DBMS for SQL dialect: "sqlite" or "duckdb"
+    chat_completion_model_provider: openai     # LLM provider
+    chat_completion_model_name: gpt-4o-mini    # Model name
+    temperature: 0                             # 0 = deterministic
+    random_seed: null                          # Integer for reproducibility, or null
 
   sql_executor:
-    db_file_path: data/employees.db
-    dbms: sqlite                               # Options: "sqlite", "duckdb"
+    db_file_path: data/employees.db            # Path to the SQLite database file
+    dbms: sqlite                               # Target DBMS: "sqlite" or "duckdb"
