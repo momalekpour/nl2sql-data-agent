@@ -488,6 +488,21 @@ logger.log("info", "EVENT_NAME", {"key": "value"})
 ```
 ---
 
+## Session Logs
+
+Every pipeline run automatically dumps a JSON file to `logs/` at the repo root. Each file is named by timestamp (`YYYY-MM-DD_HH-MM-SS.json`) and contains:
+
+```json
+{
+  "config": { /* full NL2SQLPipelineConfig snapshot */ },
+  "context": { /* complete context dict after pipeline execution */ }
+}
+```
+
+This provides full traceability of every run — the exact config used and every intermediate value produced by the operators. The `logs/` directory is git-ignored.
+
+---
+
 ## Configuration Reference
 
 `config.yaml` — all keys map 1:1 to Pydantic models in `pipeline/config.py`, validated at startup.

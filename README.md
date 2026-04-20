@@ -50,6 +50,10 @@ Department is locked at session start and enforced across five independent layer
 - **Layer 3a — Direct AST injection** (SQLExecutor, hard): sqlglot injects a missing `WHERE` on guardrailed columns (e.g., `Employee.Department = 'Engineering'`).
 - **Layer 3b — FK-aware AST injection** (SQLExecutor, hard): sqlglot injects a subquery filter for child tables queried without a JOIN (e.g., `Certification.EmployeeId IN (SELECT ...)`).
 
+### Session Logs
+
+Each pipeline run dumps its full config and context to `logs/<timestamp>.json` for traceability.
+
 ## AI Tools Used
 
 - **GitHub Copilot:** Used for inline code suggestions and autocompletion in PyCharm IDE

@@ -1,3 +1,5 @@
+import json
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -69,7 +71,22 @@ class NL2SQLPipeline:
         end_time = time.time()
         context["pipeline_latency"] = end_time - start_time
         context["timestamp"] = timestamp
+
+        self._dump_session_log(context)
+
         return context
+
+    def _dump_session_log(self, context: dict[str, Any]) -> None:
+        logs_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        filename = context["timestamp"].replace(" ", "_").replace(":", "-") + ".json"
+        filepath = os.path.join(logs_dir, filename)
+        payload = {
+            "config": self.config.model_dump(mode="json"),
+            "context": context,
+        }
+        with open(filepath, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
 
 
 if __name__ == "__main__":
