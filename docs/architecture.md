@@ -67,7 +67,7 @@ scripts/
 └── load_dotenv.sh                  # Exports all vars from .env into the shell
 
 data/
-└── employees.db                    # SQLite database (Employee, Certification, Benefit tables)
+└── employees.db                    # SQLite database (Employee, Certification, Benefits tables)
 
 docs/
 └── architecture.md                 # This file

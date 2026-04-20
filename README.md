@@ -1,64 +1,32 @@
 # NL2SQL Data Agent
 
-## Setup Environment
-
-**1. Clone the Repository**
-
-Clone the project repository to your local machine using:
+## Setup
 
 ```bash
+# Clone the repository
 git clone https://github.com/momalekpour/nl2sql-data-agent.git
 cd nl2sql-data-agent
-```
 
- **2. Installation**
-
-You will first need to install `uv` to manage dependencies. Follow the instructions at the official [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/). Once `uv` is installed, run the following command to install all dependencies, including optional ones for development:
-
-```bash
+# Install dependencies (uv manages the virtualenv and Python version automatically)
+# Install uv first if needed: https://docs.astral.sh/uv/getting-started/installation/
 uv sync --all-extras
-```
 
-This will automatically create and manage a virtual environment and fetch the appropriate Python version. No manual activation is needed — the run scripts use `uv run` to execute within the environment.
-
-<details>
-<summary>development setup</summary>
-
-Install the `pre-commit` hooks for automatic linting (`ruff`) and formatting (`black`):
-
-```bash
+# (Optional) Install pre-commit hooks for auto linting (ruff) and formatting (black) for development
 uv run pre-commit install
 ```
 
-</details>
-
-## How to Run
-
-**1. Set Environment Variables**
-
-Copy the example environment file and add your API key:
+## Run
 
 ```bash
+# Copy the example env file and set your OPENAI_API_KEY
 cp .env.example .env
-```
 
-Edit `.env` and set your `OPENAI_API_KEY`.
-
-**2. Run the Web UI** _(recommended)_
-
-```bash
+# Web UI (recommended) 
 bash scripts/run_ui.sh
-```
 
-This launches a Streamlit chat interface. Select your department from the sidebar and start asking questions.
-
-**3. Run the CLI**
-
-```bash
+# CLI REPL
 bash scripts/run_cli.sh
 ```
-
-On startup, select a department (Engineering, Sales, Marketing, or Random). All subsequent queries are automatically restricted to that department. Type your natural language question and the agent will generate SQL, execute it, and display the results. Type `exit` or `quit` to stop.
 
 ## Architecture
 
@@ -69,12 +37,20 @@ See [`docs/architecture.md`](docs/architecture.md) for full details. The applica
 3. **ExampleSelector** - Retrieves similar few-shot examples (skipped in zero-shot mode)
 4. **SQLGenerator** - LLM generates a SQL query from the question, schema, and examples
 5. **SQLCorrector** - Validates and auto-corrects SQL errors via retry loop
-6. **SQLExecutor** - Executes the final SQL; enforces department guardrails via two AST-level injections: direct `WHERE` on Employee, and subquery `IN (...)` for Certification/Benefits when queried without a JOIN
+6. **SQLExecutor** - Executes the final SQL; enforces department guardrails via AST-level injection
 7. **AnswerGenerator** - LLM summarises the query results into a natural language answer
 
-Department enforcement uses a five-layer guardrail system: intent gating, schema restriction, prompt-level constraints, direct AST WHERE injection, and FK-aware subquery injection. See [`docs/architecture.md#guardrails`](docs/architecture.md#guardrails) for details.
+### Guardrails System (5 Layers)
+
+Department is locked at session start and enforced across five independent layers:
+
+- **Layer 0 — Intent gate** (IntentGuardrail, soft): LLM checks if the question is in-domain; triggers early-stop if not.
+- **Layer 1 — Schema restriction** (SchemaLinker, hard): `schema_guardrails` hides tables/columns from the LLM entirely.
+- **Layer 2 — Prompt constraint** (SQLGenerator, soft): `row_guardrails` are rendered as mandatory filter instructions in the prompt.
+- **Layer 3a — Direct AST injection** (SQLExecutor, hard): sqlglot injects a missing `WHERE` on guardrailed columns (e.g., `Employee.Department = 'Engineering'`).
+- **Layer 3b — FK-aware AST injection** (SQLExecutor, hard): sqlglot injects a subquery filter for child tables queried without a JOIN (e.g., `Certification.EmployeeId IN (SELECT ...)`).
 
 ## AI Tools Used
 
-- **GitHub Copilot** - Used for inline code suggestions and autocompletion in PyCharm IDE
-- **Claude Code** - Assisted with brainstorming, parts of the development, codebase cleanup, and documentation
+- **GitHub Copilot:** Used for inline code suggestions and autocompletion in PyCharm IDE
+- **Claude Code:** Assisted with brainstorming, part of development, and documentation
