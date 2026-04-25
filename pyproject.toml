@@ -1,8 +1,8 @@
 [project]
-name = "nl2sql-data-agent"
+name = "vortosql"
 authors = [{ name = "Mo Malekpour" }]
 version = "0.1.0"
-description = "NL2SQL Data Agent"
+description = "VortoSQL – Natural Language to SQL Pipeline"
 license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["nl2sql", "text2sql", "nl-to-sql", "text-to-sql", "llm", "sql", "data-agent"]
@@ -34,14 +34,14 @@ dev = [
 ]
 
 [project.scripts]
-nl2sql-data-agent = "nl2sql_data_agent.cli:main"
+vortosql = "vortosql.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/nl2sql_data_agent"]
+packages = ["src/vortosql"]
 
 [tool.hatch.build.targets.sdist]
 include = [

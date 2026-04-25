@@ -1,2 +1,0 @@
-from nl2sql_data_agent.core.database.adapters.sqlite_adapter import SQLiteAdapter
-from nl2sql_data_agent.core.database.adapters.duckdb_adapter import DuckDBAdapter
