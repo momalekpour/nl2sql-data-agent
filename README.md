@@ -4,8 +4,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/momalekpour/nl2sql-data-agent.git
-cd nl2sql-data-agent
+git clone https://github.com/momalekpour/vortosql.git
+cd vortosql
 
 # Install dependencies (uv manages the virtualenv and Python version automatically)
 # Install uv first if needed: https://docs.astral.sh/uv/getting-started/installation/
